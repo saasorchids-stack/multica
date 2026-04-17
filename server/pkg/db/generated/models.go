@@ -401,6 +401,180 @@ type VerificationCode struct {
 	Attempts  int32              `json:"attempts"`
 }
 
+type McpServerRegistry struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	IsBuiltin   bool               `json:"is_builtin"`
+	Slug        string             `json:"slug"`
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	Category    string             `json:"category"`
+	IconUrl     string             `json:"icon_url"`
+	RepoUrl     string             `json:"repo_url"`
+	ServerUrl   string             `json:"server_url"`
+	Transport   string             `json:"transport"`
+	Command     string             `json:"command"`
+	Args        []byte             `json:"args"`
+	EnvVars     []byte             `json:"env_vars"`
+	AuthType    string             `json:"auth_type"`
+	OauthConfig []byte             `json:"oauth_config"`
+	Tags        []string           `json:"tags"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type AgentMcpConnector struct {
+	ID                pgtype.UUID        `json:"id"`
+	WorkspaceID       pgtype.UUID        `json:"workspace_id"`
+	AgentID           pgtype.UUID        `json:"agent_id"`
+	RegistryID        pgtype.UUID        `json:"registry_id"`
+	Name              string             `json:"name"`
+	ServerUrl         string             `json:"server_url"`
+	Transport         string             `json:"transport"`
+	Command           string             `json:"command"`
+	Args              []byte             `json:"args"`
+	EnvConfig         []byte             `json:"env_config"`
+	AuthType          string             `json:"auth_type"`
+	VaultCredentialID pgtype.UUID        `json:"vault_credential_id"`
+	Enabled           bool               `json:"enabled"`
+	Status            string             `json:"status"`
+	StatusMessage     pgtype.Text        `json:"status_message"`
+	LastValidatedAt   pgtype.Timestamptz `json:"last_validated_at"`
+	DiscoveredTools   []byte             `json:"discovered_tools"`
+	ToolsDiscoveredAt pgtype.Timestamptz `json:"tools_discovered_at"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ManagedAgent struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	Name           string             `json:"name"`
+	Description    pgtype.Text        `json:"description"`
+	Model          []byte             `json:"model"`
+	SystemPrompt   pgtype.Text        `json:"system_prompt"`
+	Tools          []byte             `json:"tools"`
+	McpServers     []byte             `json:"mcp_servers"`
+	Skills         []byte             `json:"skills"`
+	CallableAgents []byte             `json:"callable_agents"`
+	Metadata       []byte             `json:"metadata"`
+	Version        int32              `json:"version"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	ArchivedAt     pgtype.Timestamptz `json:"archived_at"`
+}
+
+type ManagedAgentVersion struct {
+	ID       pgtype.UUID        `json:"id"`
+	AgentID  pgtype.UUID        `json:"agent_id"`
+	Version  int32              `json:"version"`
+	Snapshot []byte             `json:"snapshot"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type Environment struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	Name        string             `json:"name"`
+	Config      []byte             `json:"config"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	ArchivedAt  pgtype.Timestamptz `json:"archived_at"`
+}
+
+type ManagedSession struct {
+	ID                       pgtype.UUID        `json:"id"`
+	WorkspaceID              pgtype.UUID        `json:"workspace_id"`
+	AgentID                  pgtype.UUID        `json:"agent_id"`
+	AgentVersion             int32              `json:"agent_version"`
+	EnvironmentID            pgtype.UUID        `json:"environment_id"`
+	Status                   string             `json:"status"`
+	VaultIds                 []pgtype.UUID      `json:"vault_ids"`
+	Resources                []byte             `json:"resources"`
+	UsageInputTokens         int64              `json:"usage_input_tokens"`
+	UsageOutputTokens        int64              `json:"usage_output_tokens"`
+	UsageCacheCreationTokens int64              `json:"usage_cache_creation_tokens"`
+	UsageCacheReadTokens     int64              `json:"usage_cache_read_tokens"`
+	Title                    pgtype.Text        `json:"title"`
+	StopReason               []byte             `json:"stop_reason"`
+	CreatedAt                pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt                pgtype.Timestamptz `json:"updated_at"`
+	ArchivedAt               pgtype.Timestamptz `json:"archived_at"`
+}
+
+type SessionEvent struct {
+	ID          pgtype.UUID        `json:"id"`
+	SessionID   pgtype.UUID        `json:"session_id"`
+	ThreadID    pgtype.UUID        `json:"thread_id"`
+	Type        string             `json:"type"`
+	Payload     []byte             `json:"payload"`
+	ProcessedAt pgtype.Timestamptz `json:"processed_at"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type MemoryStore struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	Name        string             `json:"name"`
+	Description pgtype.Text        `json:"description"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	ArchivedAt  pgtype.Timestamptz `json:"archived_at"`
+}
+
+type Memory struct {
+	ID               pgtype.UUID        `json:"id"`
+	StoreID          pgtype.UUID        `json:"store_id"`
+	Path             string             `json:"path"`
+	Content          string             `json:"content"`
+	ContentSha256    string             `json:"content_sha256"`
+	ContentSizeBytes int32              `json:"content_size_bytes"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
+type MemoryVersion struct {
+	ID               pgtype.UUID        `json:"id"`
+	MemoryID         pgtype.UUID        `json:"memory_id"`
+	StoreID          pgtype.UUID        `json:"store_id"`
+	Operation        string             `json:"operation"`
+	Content          pgtype.Text        `json:"content"`
+	ContentSha256    pgtype.Text        `json:"content_sha256"`
+	ContentSizeBytes pgtype.Int4        `json:"content_size_bytes"`
+	Path             string             `json:"path"`
+	SessionID        pgtype.UUID        `json:"session_id"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	RedactedAt       pgtype.Timestamptz `json:"redacted_at"`
+}
+
+type Vault struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	DisplayName string             `json:"display_name"`
+	Metadata    []byte             `json:"metadata"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	ArchivedAt  pgtype.Timestamptz `json:"archived_at"`
+}
+
+type VaultCredential struct {
+	ID               pgtype.UUID        `json:"id"`
+	VaultID          pgtype.UUID        `json:"vault_id"`
+	McpServerUrl     string             `json:"mcp_server_url"`
+	AuthType         string             `json:"auth_type"`
+	EncryptedPayload []byte             `json:"encrypted_payload"`
+	ExpiresAt        pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	ArchivedAt       pgtype.Timestamptz `json:"archived_at"`
+}
+
+type SessionThread struct {
+	ID        pgtype.UUID        `json:"id"`
+	SessionID pgtype.UUID        `json:"session_id"`
+	AgentID   pgtype.UUID        `json:"agent_id"`
+	AgentName string             `json:"agent_name"`
+	Status    string             `json:"status"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type Workspace struct {
 	ID           pgtype.UUID        `json:"id"`
 	Name         string             `json:"name"`

@@ -88,4 +88,8 @@ const (
 	// Daemon events
 	EventDaemonHeartbeat = "daemon:heartbeat"
 	EventDaemonRegister  = "daemon:register"
+
+	// v1 Managed Agents events
+	EventV1SessionEvent  = "v1:session:event"
+	EventV1SessionStatus = "v1:session:status"
 )

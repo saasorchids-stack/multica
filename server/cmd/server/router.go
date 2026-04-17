@@ -364,6 +364,80 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 			})
 			r.Get("/api/chat/pending-tasks", h.ListPendingChatTasks)
 
+			// --- v1 Managed Agents API (Claude Managed Agents compatible) ---
+			r.Route("/api/v1/agents", func(r chi.Router) {
+				r.Get("/", h.ListManagedAgents)
+				r.Post("/", h.CreateManagedAgent)
+				r.Route("/{agentId}", func(r chi.Router) {
+					r.Get("/", h.GetManagedAgent)
+					r.Put("/", h.UpdateManagedAgent)
+					r.Post("/archive", h.ArchiveManagedAgent)
+					r.Get("/versions", h.ListManagedAgentVersions)
+					// MCP connectors per agent
+					r.Route("/mcp", func(r chi.Router) {
+						r.Get("/", h.ListAgentMcpConnectors)
+						r.Post("/", h.CreateAgentMcpConnector)
+						r.Post("/from-registry", h.AddMcpFromRegistry)
+						r.Route("/{connectorId}", func(r chi.Router) {
+							r.Get("/", h.GetAgentMcpConnector)
+							r.Put("/", h.UpdateAgentMcpConnector)
+							r.Delete("/", h.DeleteAgentMcpConnector)
+							r.Post("/validate", h.ValidateMcpConnector)
+							r.Post("/discover", h.DiscoverMcpTools)
+						})
+					})
+				})
+			})
+
+			r.Route("/api/v1/environments", func(r chi.Router) {
+				r.Get("/", h.ListEnvironments)
+				r.Post("/", h.CreateEnvironment)
+				r.Route("/{envId}", func(r chi.Router) {
+					r.Get("/", h.GetEnvironment)
+					r.Post("/archive", h.ArchiveEnvironment)
+				})
+			})
+
+			r.Route("/api/v1/sessions", func(r chi.Router) {
+				r.Get("/", h.ListManagedSessions)
+				r.Post("/", h.CreateManagedSession)
+				r.Route("/{sessionId}", func(r chi.Router) {
+					r.Get("/", h.GetManagedSession)
+					r.Post("/archive", h.ArchiveManagedSession)
+					r.Get("/events", h.ListSessionEvents)
+					r.Get("/stream", h.StreamSessionEvents)
+				})
+			})
+
+			r.Route("/api/v1/memory-stores", func(r chi.Router) {
+				r.Get("/", h.ListMemoryStores)
+				r.Post("/", h.CreateMemoryStore)
+				r.Route("/{storeId}", func(r chi.Router) {
+					r.Get("/", h.GetMemoryStore)
+				})
+			})
+
+			r.Route("/api/v1/vaults", func(r chi.Router) {
+				r.Get("/", h.ListVaults)
+				r.Post("/", h.CreateVault)
+				r.Route("/{vaultId}", func(r chi.Router) {
+					r.Get("/", h.GetVault)
+				})
+			})
+
+			// MCP Server Registry & Catalog
+			r.Get("/api/v1/mcp/catalog", h.ListMcpCatalog)
+			r.Route("/api/v1/mcp/registry", func(r chi.Router) {
+				r.Get("/", h.ListMcpRegistry)
+				r.Post("/", h.CreateMcpRegistry)
+				r.Post("/seed", h.SeedMcpRegistry)
+				r.Post("/seed-all", h.SeedAllMcpRegistry)
+				r.Route("/{registryId}", func(r chi.Router) {
+					r.Get("/", h.GetMcpRegistry)
+					r.Delete("/", h.DeleteMcpRegistry)
+				})
+			})
+
 			// Inbox
 			r.Route("/api/inbox", func(r chi.Router) {
 				r.Get("/", h.ListInbox)

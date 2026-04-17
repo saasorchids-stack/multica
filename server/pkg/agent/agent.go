@@ -25,8 +25,19 @@ type ExecOptions struct {
 	SystemPrompt    string
 	MaxTurns        int
 	Timeout         time.Duration
-	ResumeSessionID string   // if non-empty, resume a previous agent session
-	CustomArgs      []string // additional CLI arguments appended to the agent command
+	ResumeSessionID string          // if non-empty, resume a previous agent session
+	CustomArgs      []string        // additional CLI arguments appended to the agent command
+	McpServers      []McpServerSpec // MCP servers to attach to this execution
+}
+
+// McpServerSpec defines an MCP server to connect during agent execution.
+type McpServerSpec struct {
+	Name      string            `json:"name"`
+	Transport string            `json:"transport"` // "stdio" | "sse" | "streamable-http"
+	Command   string            `json:"command"`   // for stdio
+	Args      []string          `json:"args"`
+	URL       string            `json:"url"`       // for sse/streamable-http
+	Env       map[string]string `json:"env"`       // environment variables
 }
 
 // Session represents a running agent execution.

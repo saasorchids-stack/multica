@@ -51,3 +51,5 @@ export type {
   GetAutopilotResponse,
   ListAutopilotRunsResponse,
 } from "./autopilot";
+export type * from "./managed-agents";
+export type * from "./mcp";

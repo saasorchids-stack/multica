@@ -168,9 +168,28 @@ func (b *hermesBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 			sessionID = opts.ResumeSessionID
 			_ = result
 		} else {
+			// Build MCP servers list from ExecOptions
+			mcpServers := make([]any, 0, len(opts.McpServers))
+			for _, s := range opts.McpServers {
+				entry := map[string]any{"name": s.Name, "transport": s.Transport}
+				if s.Command != "" {
+					entry["command"] = s.Command
+				}
+				if len(s.Args) > 0 {
+					entry["args"] = s.Args
+				}
+				if s.URL != "" {
+					entry["url"] = s.URL
+				}
+				if len(s.Env) > 0 {
+					entry["env"] = s.Env
+				}
+				mcpServers = append(mcpServers, entry)
+			}
+
 			result, err := c.request(runCtx, "session/new", map[string]any{
 				"cwd":        cwd,
-				"mcpServers": []any{},
+				"mcpServers": mcpServers,
 			})
 			if err != nil {
 				finalStatus = "failed"

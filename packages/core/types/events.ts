@@ -57,7 +57,9 @@ export type WSEventType =
   | "invitation:created"
   | "invitation:accepted"
   | "invitation:declined"
-  | "invitation:revoked";
+  | "invitation:revoked"
+  | "v1:session:event"
+  | "v1:session:status";
 
 export interface WSMessage<T = unknown> {
   type: WSEventType;

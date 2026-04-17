@@ -375,7 +375,43 @@ func buildClaudeArgs(opts ExecOptions, logger *slog.Logger) []string {
 		args = append(args, "--resume", opts.ResumeSessionID)
 	}
 	args = append(args, filterCustomArgs(opts.CustomArgs, claudeBlockedArgs, logger)...)
+
+	// Pass MCP servers via --mcp-config if any are configured
+	if len(opts.McpServers) > 0 {
+		mcpConfig := buildClaudeMcpConfig(opts.McpServers)
+		if mcpJSON, err := json.Marshal(mcpConfig); err == nil {
+			args = append(args, "--mcp-config", string(mcpJSON))
+		}
+	}
+
 	return args
+}
+
+// buildClaudeMcpConfig converts McpServerSpec list to Claude Code's MCP config format.
+func buildClaudeMcpConfig(servers []McpServerSpec) map[string]any {
+	mcpServers := map[string]any{}
+	for _, s := range servers {
+		entry := map[string]any{}
+		switch s.Transport {
+		case "sse":
+			entry["type"] = "sse"
+			entry["url"] = s.URL
+		case "streamable-http":
+			entry["type"] = "streamable-http"
+			entry["url"] = s.URL
+		default: // stdio
+			entry["type"] = "stdio"
+			entry["command"] = s.Command
+			if len(s.Args) > 0 {
+				entry["args"] = s.Args
+			}
+		}
+		if len(s.Env) > 0 {
+			entry["env"] = s.Env
+		}
+		mcpServers[s.Name] = entry
+	}
+	return map[string]any{"mcpServers": mcpServers}
 }
 
 func writeClaudeInput(w io.Writer, prompt string) error {
