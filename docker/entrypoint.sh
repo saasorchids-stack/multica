@@ -13,11 +13,23 @@ if [ -n "$MULTICA_AUTH_TOKEN" ]; then
   command -v codex  >/dev/null 2>&1 && HAS_AGENT=true
 
   if [ "$HAS_AGENT" = "true" ]; then
-    echo "Starting agent daemon..."
-    MULTICA_SERVER_URL="http://localhost:${PORT:-8080}" \
-      ./multica daemon start --foreground &
+    echo "Starting agent daemon (will wait for server)..."
+    # Run daemon in a subshell that waits for the server to be ready first.
+    (
+      SERVER_PORT="${PORT:-8080}"
+      echo "Daemon: waiting for server on port $SERVER_PORT..."
+      for i in $(seq 1 30); do
+        if wget -q -O /dev/null "http://localhost:$SERVER_PORT/health" 2>/dev/null; then
+          echo "Daemon: server is ready, starting..."
+          MULTICA_SERVER_URL="http://localhost:$SERVER_PORT" \
+            exec ./multica daemon start --foreground
+        fi
+        sleep 1
+      done
+      echo "Daemon: server did not become ready in 30s, giving up"
+    ) &
     DAEMON_PID=$!
-    echo "Daemon started (PID=$DAEMON_PID)"
+    echo "Daemon launcher started (PID=$DAEMON_PID)"
   else
     echo "WARN: MULTICA_AUTH_TOKEN set but no agent CLI found (install claude or codex)"
   fi
