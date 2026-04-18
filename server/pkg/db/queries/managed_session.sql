@@ -62,6 +62,16 @@ UPDATE managed_session SET
 WHERE id = $1
 RETURNING *;
 
+-- name: SetManagedSessionResources :one
+UPDATE managed_session SET
+    resources = $2::jsonb,
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: DeleteManagedSession :exec
+DELETE FROM managed_session WHERE id = $1;
+
 -- name: TerminateManagedSession :exec
 UPDATE managed_session SET
     status = 'terminated',

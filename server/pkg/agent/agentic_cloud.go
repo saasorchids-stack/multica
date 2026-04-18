@@ -36,6 +36,8 @@ type agenticCloudBackend struct {
 	toolExecutor ToolExecutor
 	tools        []anthropicTool
 	maxTurns     int
+	// builtinTools is the set of tools the server can execute.
+	builtinToolSet map[string]bool
 }
 
 // NewAgenticCloudClaude creates a Backend with full agentic loop support.
@@ -61,13 +63,20 @@ func NewAgenticCloudClaude(apiKey string, logger *slog.Logger, executor ToolExec
 		}
 	}
 
+	// Record which tools the server can execute locally
+	builtinSet := make(map[string]bool, len(allTools))
+	for _, t := range allTools {
+		builtinSet[t.Name] = true
+	}
+
 	return &agenticCloudBackend{
-		apiKey:       apiKey,
-		baseURL:      "https://api.anthropic.com",
-		logger:       logger,
-		toolExecutor: executor,
-		tools:        tools,
-		maxTurns:     25,
+		apiKey:         apiKey,
+		baseURL:        "https://api.anthropic.com",
+		logger:         logger,
+		toolExecutor:   executor,
+		tools:          tools,
+		maxTurns:       25,
+		builtinToolSet: builtinSet,
 	}
 }
 
@@ -102,6 +111,47 @@ func (b *agenticCloudBackend) Execute(ctx context.Context, prompt string, opts E
 		tools = AllTools()
 	}
 
+	// Add custom tool definitions (client-side tools)
+	if len(opts.CustomTools) > 0 {
+		for _, name := range opts.CustomTools {
+			tools = append(tools, anthropicTool{
+				Name:        name,
+				Description: fmt.Sprintf("Custom tool '%s' — executed by the client.", name),
+				InputSchema: map[string]any{
+					"type":       "object",
+					"properties": map[string]any{},
+				},
+			})
+		}
+	}
+
+	// Add MCP tools discovered from connected servers
+	mcpToolSet := make(map[string]bool)
+	if len(opts.McpTools) > 0 {
+		for _, mt := range opts.McpTools {
+			tools = append(tools, anthropicTool{
+				Name:        mt.Name,
+				Description: mt.Description,
+				InputSchema: mt.InputSchema,
+			})
+			mcpToolSet[mt.Name] = true
+		}
+	}
+
+	// Build custom tool set for fast lookups
+	customToolSet := make(map[string]bool, len(opts.CustomTools))
+	for _, n := range opts.CustomTools {
+		customToolSet[n] = true
+	}
+
+	// Permission policies
+	permissions := opts.ToolPermissions
+	if permissions == nil {
+		permissions = map[string]string{}
+	}
+
+	customToolResultsCh := make(chan CustomToolResult, 16)
+	toolConfirmationsCh := make(chan ToolConfirmation, 16)
 	msgCh := make(chan Message, 256)
 	resCh := make(chan Result, 1)
 
@@ -110,22 +160,36 @@ func (b *agenticCloudBackend) Execute(ctx context.Context, prompt string, opts E
 		defer close(msgCh)
 		defer close(resCh)
 
-		b.agenticLoop(runCtx, model, systemPrompt, prompt, tools, maxTurns, msgCh, resCh)
+		b.agenticLoop(runCtx, model, systemPrompt, prompt, tools, maxTurns,
+			customToolSet, mcpToolSet, permissions, customToolResultsCh, toolConfirmationsCh,
+			msgCh, resCh)
 	}()
 
-	return &Session{Messages: msgCh, Result: resCh}, nil
+	return &Session{
+		Messages:          msgCh,
+		Result:            resCh,
+		CustomToolResults: customToolResultsCh,
+		ToolConfirmations: toolConfirmationsCh,
+	}, nil
 }
 
 // agenticLoop runs the multi-turn conversation loop. Each iteration:
 // 1. Call Anthropic API with current messages
 // 2. Parse streaming response, collecting text + tool_use blocks
 // 3. If stop_reason == "tool_use", execute all tools, append results, loop
+//    - For custom tools: pause and wait for client result
+//    - For tools with permission_policy "always_ask": pause and wait for confirmation
 // 4. If stop_reason == "end_turn" or max turns reached, finish
 func (b *agenticCloudBackend) agenticLoop(
 	ctx context.Context,
 	model, systemPrompt, prompt string,
 	tools []anthropicTool,
 	maxTurns int,
+	customTools map[string]bool,
+	mcpTools map[string]bool,
+	permissions map[string]string,
+	customToolResultsCh <-chan CustomToolResult,
+	toolConfirmationsCh <-chan ToolConfirmation,
 	msgCh chan<- Message,
 	resCh chan<- Result,
 ) {
@@ -221,16 +285,137 @@ func (b *agenticCloudBackend) agenticLoop(
 		// Execute each tool and build tool_result blocks
 		var toolResults []contentBlock
 		for _, tu := range toolUseBlocks {
+			input := parseToolInput(tu.Input)
+
+			// Check permission policy — "always_ask" requires client confirmation
+			policy := permissions[tu.Name]
+			if policy == "always_deny" {
+				toolResults = append(toolResults, contentBlock{
+					Type:      "tool_result",
+					ToolUseID: tu.ID,
+					Content:   "Tool denied by permission policy",
+				})
+				safeSend(ctx, msgCh, Message{
+					Type:   MessageToolResult,
+					Tool:   tu.Name,
+					CallID: tu.ID,
+					Output: "Tool denied by permission policy",
+				})
+				continue
+			}
+
+			if policy == "always_ask" {
+				// Notify client that confirmation is required
+				safeSend(ctx, msgCh, Message{
+					Type:   MessageToolConfirmReq,
+					Tool:   tu.Name,
+					CallID: tu.ID,
+					Input:  input,
+					Status: "requires_confirmation",
+				})
+
+				// Wait for client confirmation
+				var confirmed bool
+				var denyReason string
+				select {
+				case conf := <-toolConfirmationsCh:
+					confirmed = conf.Approved
+					denyReason = conf.Reason
+				case <-ctx.Done():
+					finalStatus = "aborted"
+					finalError = ctx.Err().Error()
+					goto done
+				}
+
+				if !confirmed {
+					msg := "Tool execution denied by user"
+					if denyReason != "" {
+						msg += ": " + denyReason
+					}
+					toolResults = append(toolResults, contentBlock{
+						Type:      "tool_result",
+						ToolUseID: tu.ID,
+						Content:   msg,
+					})
+					safeSend(ctx, msgCh, Message{
+						Type:   MessageToolResult,
+						Tool:   tu.Name,
+						CallID: tu.ID,
+						Output: msg,
+					})
+					continue
+				}
+			}
+
+			// Check if this is a custom (client-side) tool
+			if customTools[tu.Name] {
+				// Notify client of custom tool use
+				safeSend(ctx, msgCh, Message{
+					Type:   MessageCustomToolUse,
+					Tool:   tu.Name,
+					CallID: tu.ID,
+					Input:  input,
+					Status: "requires_action",
+				})
+
+				// Wait for client to send the result
+				select {
+				case result := <-customToolResultsCh:
+					toolResults = append(toolResults, contentBlock{
+						Type:      "tool_result",
+						ToolUseID: tu.ID,
+						Content:   result.Output,
+					})
+					safeSend(ctx, msgCh, Message{
+						Type:   MessageToolResult,
+						Tool:   tu.Name,
+						CallID: tu.ID,
+						Output: truncateOutput(result.Output, 30000),
+					})
+				case <-ctx.Done():
+					finalStatus = "aborted"
+					finalError = ctx.Err().Error()
+					goto done
+				}
+				continue
+			}
+
+			// Check if this is an MCP tool — execute via MCP pool
+			if mcpTools[tu.Name] {
+				safeSend(ctx, msgCh, Message{
+					Type:   MessageToolUse,
+					Tool:   tu.Name,
+					CallID: tu.ID,
+					Input:  input,
+				})
+
+				// MCP tools are executed by the ToolExecutor which is aware
+				// of MCP routing (executor delegates to MCP pool).
+				result := b.toolExecutor.Execute(ctx, tu.Name, tu.ID, input)
+				safeSend(ctx, msgCh, Message{
+					Type:   MessageToolResult,
+					Tool:   tu.Name,
+					CallID: tu.ID,
+					Output: truncateOutput(result.Output, 30000),
+				})
+				toolResults = append(toolResults, contentBlock{
+					Type:      "tool_result",
+					ToolUseID: tu.ID,
+					Content:   truncateOutput(result.Output, 30000),
+				})
+				continue
+			}
+
+			// Standard server-side tool execution
 			// Notify about tool use
 			safeSend(ctx, msgCh, Message{
 				Type:   MessageToolUse,
 				Tool:   tu.Name,
 				CallID: tu.ID,
-				Input:  parseToolInput(tu.Input),
+				Input:  input,
 			})
 
 			// Execute the tool
-			input := parseToolInput(tu.Input)
 			result := b.toolExecutor.Execute(ctx, tu.Name, tu.ID, input)
 
 			// Notify about tool result

@@ -136,3 +136,41 @@ func (q *Queries) DeleteManagedSession(ctx context.Context, id pgtype.UUID) erro
 	_, err := q.db.Exec(ctx, deleteManagedSession, id)
 	return err
 }
+
+const addManagedSessionResource = `-- name: AddManagedSessionResource :one
+UPDATE managed_session SET
+    resources = resources || $2::jsonb,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, workspace_id, agent_id, agent_version, environment_id, status, vault_ids, resources, usage_input_tokens, usage_output_tokens, usage_cache_creation_tokens, usage_cache_read_tokens, title, stop_reason, created_at, updated_at, archived_at`
+
+func (q *Queries) AddManagedSessionResource(ctx context.Context, id pgtype.UUID, resource []byte) (ManagedSession, error) {
+	row := q.db.QueryRow(ctx, addManagedSessionResource, id, resource)
+	var i ManagedSession
+	err := row.Scan(
+		&i.ID, &i.WorkspaceID, &i.AgentID, &i.AgentVersion, &i.EnvironmentID,
+		&i.Status, &i.VaultIds, &i.Resources,
+		&i.UsageInputTokens, &i.UsageOutputTokens, &i.UsageCacheCreationTokens, &i.UsageCacheReadTokens,
+		&i.Title, &i.StopReason, &i.CreatedAt, &i.UpdatedAt, &i.ArchivedAt,
+	)
+	return i, err
+}
+
+const setManagedSessionResources = `-- name: SetManagedSessionResources :one
+UPDATE managed_session SET
+    resources = $2::jsonb,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, workspace_id, agent_id, agent_version, environment_id, status, vault_ids, resources, usage_input_tokens, usage_output_tokens, usage_cache_creation_tokens, usage_cache_read_tokens, title, stop_reason, created_at, updated_at, archived_at`
+
+func (q *Queries) SetManagedSessionResources(ctx context.Context, id pgtype.UUID, resources []byte) (ManagedSession, error) {
+	row := q.db.QueryRow(ctx, setManagedSessionResources, id, resources)
+	var i ManagedSession
+	err := row.Scan(
+		&i.ID, &i.WorkspaceID, &i.AgentID, &i.AgentVersion, &i.EnvironmentID,
+		&i.Status, &i.VaultIds, &i.Resources,
+		&i.UsageInputTokens, &i.UsageOutputTokens, &i.UsageCacheCreationTokens, &i.UsageCacheReadTokens,
+		&i.Title, &i.StopReason, &i.CreatedAt, &i.UpdatedAt, &i.ArchivedAt,
+	)
+	return i, err
+}

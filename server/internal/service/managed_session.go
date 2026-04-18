@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/executor"
+	"github.com/multica-ai/multica/server/internal/mcpclient"
 	"github.com/multica-ai/multica/server/internal/realtime"
 	"github.com/multica-ai/multica/server/internal/stream"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -26,15 +28,21 @@ type ManagedSessionService struct {
 	Hub     *realtime.Hub
 	Bus     *events.Bus
 	Logger  *slog.Logger
+
+	// activeSessions tracks running sessions so we can send them custom tool
+	// results and tool confirmations from event handlers.
+	mu             sync.Mutex
+	activeSessions map[string]*agent.Session // keyed by session UUID string
 }
 
 // NewManagedSessionService creates a new session execution service.
 func NewManagedSessionService(q *db.Queries, hub *realtime.Hub, bus *events.Bus) *ManagedSessionService {
 	return &ManagedSessionService{
-		Queries: q,
-		Hub:     hub,
-		Bus:     bus,
-		Logger:  slog.Default(),
+		Queries:        q,
+		Hub:            hub,
+		Bus:            bus,
+		Logger:         slog.Default(),
+		activeSessions: make(map[string]*agent.Session),
 	}
 }
 
@@ -70,6 +78,34 @@ func (s *ManagedSessionService) ExecuteSession(
 	go func() {
 		// Create tool executor
 		rawExec := executor.NewExecutor(s.Queries, session.WorkspaceID, session.ID, s.Logger)
+		defer rawExec.Close() // Clean up sandbox on completion
+
+		// Load MCP connectors for this agent and create MCP pool
+		var mcpPool *mcpclient.Pool
+		var mcpToolDefs []agent.McpToolDef
+		mcpConfigs := loadMcpConfigs(agentRow)
+		if len(mcpConfigs) > 0 {
+			pool, err := mcpclient.NewPool(ctx, mcpConfigs, s.Logger)
+			if err != nil {
+				s.Logger.Warn("MCP pool creation failed, continuing without MCP tools",
+					"error", err, "session_id", sessionIDStr)
+			} else {
+				mcpPool = pool
+				defer mcpPool.Close()
+				mcpToolDefs = mcpPool.Tools()
+
+				// Wire MCP execution into the executor
+				rawExec.McpExecute = func(ctx context.Context, toolName string, args map[string]any) (string, error) {
+					return mcpPool.Execute(ctx, toolName, args)
+				}
+
+				s.Logger.Info("MCP pool connected",
+					"session_id", sessionIDStr,
+					"servers", len(mcpConfigs),
+					"tools", len(mcpToolDefs))
+			}
+		}
+
 		exec := &executorAdapter{exec: rawExec}
 
 		// Extract model from agent config
@@ -83,13 +119,23 @@ func (s *ManagedSessionService) ExecuteSession(
 
 		// Build tool set from agent config — nil means use all tools
 		var toolNames []string
+		var customTools []string
+		permissions := map[string]string{}
 		if agentRow.Tools != nil {
-			var customTools []struct {
-				Name string `json:"name"`
+			var toolConfigs []struct {
+				Name             string `json:"name"`
+				Type             string `json:"type"`
+				PermissionPolicy string `json:"permission_policy"`
 			}
-			if json.Unmarshal(agentRow.Tools, &customTools) == nil {
-				for _, t := range customTools {
+			if json.Unmarshal(agentRow.Tools, &toolConfigs) == nil {
+				for _, t := range toolConfigs {
 					toolNames = append(toolNames, t.Name)
+					if t.Type == "custom" {
+						customTools = append(customTools, t.Name)
+					}
+					if t.PermissionPolicy != "" {
+						permissions[t.Name] = t.PermissionPolicy
+					}
 				}
 			}
 		}
@@ -99,10 +145,13 @@ func (s *ManagedSessionService) ExecuteSession(
 
 		// Execute the agentic loop
 		agentSession, err := backend.Execute(ctx, prompt, agent.ExecOptions{
-			Model:        model,
-			SystemPrompt: systemPrompt,
-			MaxTurns:     25,
-			Timeout:      10 * time.Minute,
+			Model:           model,
+			SystemPrompt:    systemPrompt,
+			MaxTurns:        25,
+			Timeout:         10 * time.Minute,
+			CustomTools:     customTools,
+			ToolPermissions: permissions,
+			McpTools:        mcpToolDefs,
 		})
 
 		if err != nil {
@@ -110,6 +159,16 @@ func (s *ManagedSessionService) ExecuteSession(
 			s.failSession(ctx, session.ID, workspaceIDStr, sessionIDStr, err.Error())
 			return
 		}
+
+		// Register active session for custom tool results / confirmations
+		s.mu.Lock()
+		s.activeSessions[sessionIDStr] = agentSession
+		s.mu.Unlock()
+		defer func() {
+			s.mu.Lock()
+			delete(s.activeSessions, sessionIDStr)
+			s.mu.Unlock()
+		}()
 
 		// Drain messages, stream to clients, save events
 		s.drainAndStream(ctx, agentSession, session, workspaceIDStr, sessionIDStr)
@@ -256,6 +315,38 @@ func (s *ManagedSessionService) broadcastEvent(workspaceIDStr, sessionIDStr, eve
 	s.Hub.BroadcastToWorkspace(workspaceIDStr, msg)
 }
 
+// SendCustomToolResult sends a custom tool result to the waiting agentic loop.
+func (s *ManagedSessionService) SendCustomToolResult(sessionID string, result agent.CustomToolResult) error {
+	s.mu.Lock()
+	sess, ok := s.activeSessions[sessionID]
+	s.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("no active session %s", sessionID)
+	}
+	select {
+	case sess.CustomToolResults <- result:
+		return nil
+	default:
+		return fmt.Errorf("custom tool result channel full for session %s", sessionID)
+	}
+}
+
+// SendToolConfirmation sends a tool confirmation to the waiting agentic loop.
+func (s *ManagedSessionService) SendToolConfirmation(sessionID string, conf agent.ToolConfirmation) error {
+	s.mu.Lock()
+	sess, ok := s.activeSessions[sessionID]
+	s.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("no active session %s", sessionID)
+	}
+	select {
+	case sess.ToolConfirmations <- conf:
+		return nil
+	default:
+		return fmt.Errorf("tool confirmation channel full for session %s", sessionID)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -321,6 +412,40 @@ func truncateForBroadcast(s string) string {
 		return s[:2000] + "..."
 	}
 	return s
+}
+
+// loadMcpConfigs extracts MCP server configurations from an agent's
+// mcp_servers JSONB column. Returns nil if no MCP servers are configured.
+func loadMcpConfigs(a db.ManagedAgent) []mcpclient.Config {
+	if a.McpServers == nil {
+		return nil
+	}
+	var specs []struct {
+		Name      string            `json:"name"`
+		Transport string            `json:"transport"`
+		Command   string            `json:"command"`
+		Args      []string          `json:"args"`
+		URL       string            `json:"url"`
+		Env       map[string]string `json:"env"`
+	}
+	if err := json.Unmarshal(a.McpServers, &specs); err != nil {
+		return nil
+	}
+	configs := make([]mcpclient.Config, 0, len(specs))
+	for _, s := range specs {
+		if s.Name == "" {
+			continue
+		}
+		configs = append(configs, mcpclient.Config{
+			Name:      s.Name,
+			Transport: s.Transport,
+			Command:   s.Command,
+			Args:      s.Args,
+			URL:       s.URL,
+			Env:       s.Env,
+		})
+	}
+	return configs
 }
 
 // executorAdapter wraps executor.Executor to satisfy the agent.ToolExecutor

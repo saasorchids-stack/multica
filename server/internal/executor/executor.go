@@ -13,12 +13,12 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/sandbox"
 	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -37,19 +37,36 @@ type Executor struct {
 	WorkspaceID pgtype.UUID
 	SessionID   pgtype.UUID
 	Logger      *slog.Logger
-	WorkDir     string
+	Sandbox     *sandbox.Sandbox
 	BashTimeout time.Duration
+	// McpExecute is set by the session service when MCP servers are connected.
+	// It routes MCP tool calls to the appropriate server.
+	McpExecute func(ctx context.Context, toolName string, args map[string]any) (string, error)
 }
 
 // NewExecutor creates a tool executor bound to a workspace and session.
+// It creates an isolated sandbox for the session.
 func NewExecutor(q *db.Queries, workspaceID, sessionID pgtype.UUID, logger *slog.Logger) *Executor {
+	sid := util.UUIDToString(sessionID)
+	sb, err := sandbox.New(sandbox.Config{SessionID: sid})
+	if err != nil {
+		logger.Error("failed to create sandbox, falling back to /tmp", "error", err)
+		sb, _ = sandbox.New(sandbox.Config{SessionID: sid, BaseDir: "/tmp"})
+	}
 	return &Executor{
 		Queries:     q,
 		WorkspaceID: workspaceID,
 		SessionID:   sessionID,
 		Logger:      logger,
-		WorkDir:     "/tmp",
+		Sandbox:     sb,
 		BashTimeout: 30 * time.Second,
+	}
+}
+
+// Close releases sandbox resources. Should be called when the session ends.
+func (e *Executor) Close() {
+	if e.Sandbox != nil {
+		e.Sandbox.Close()
 	}
 }
 
@@ -94,6 +111,14 @@ func (e *Executor) Execute(ctx context.Context, toolName, callID string, input m
 	case "delegate_to_agent":
 		output, isError = e.execDelegateToAgent(ctx, input)
 	default:
+		// Try MCP executor if available
+		if e.McpExecute != nil {
+			result, err := e.McpExecute(ctx, toolName, input)
+			if err != nil {
+				return ToolResult{CallID: callID, Output: "MCP tool error: " + err.Error(), IsError: true}
+			}
+			return ToolResult{CallID: callID, Output: result}
+		}
 		output = fmt.Sprintf("Unknown tool: %s", toolName)
 		isError = true
 	}
@@ -115,58 +140,13 @@ func (e *Executor) execBash(ctx context.Context, input map[string]any) (string, 
 		return "command is required", true
 	}
 
-	if containsDangerousCommand(command) {
-		return "command blocked for security: destructive operations not allowed in cloud sandbox", true
-	}
-
 	timeout := e.BashTimeout
 	if t, ok := input["timeout"].(float64); ok && t > 0 && t <= 120 {
 		timeout = time.Duration(t) * time.Second
 	}
 
-	execCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(execCtx, "sh", "-c", command)
-	cmd.Dir = e.WorkDir
-	cmd.Env = []string{
-		"HOME=/tmp",
-		"PATH=/usr/local/bin:/usr/bin:/bin",
-		"TERM=xterm",
-		"LANG=en_US.UTF-8",
-	}
-
-	out, err := cmd.CombinedOutput()
-	result := string(out)
-
-	if len(result) > 50000 {
-		result = result[:50000] + "\n... (output truncated at 50KB)"
-	}
-
-	if err != nil {
-		if execCtx.Err() == context.DeadlineExceeded {
-			return fmt.Sprintf("command timed out after %v:\n%s", timeout, result), true
-		}
-		return fmt.Sprintf("exit code %s:\n%s", err.Error(), result), false
-	}
-
-	return result, false
-}
-
-func containsDangerousCommand(cmd string) bool {
-	lower := strings.ToLower(cmd)
-	dangerous := []string{
-		"rm -rf /", "mkfs", "dd if=", ":(){:|:&};:",
-		"chmod -R 777 /", "shutdown", "reboot", "halt",
-		"init 0", "init 6", "> /dev/sda",
-		"curl | sh", "wget | sh", "curl | bash", "wget | bash",
-	}
-	for _, d := range dangerous {
-		if strings.Contains(lower, d) {
-			return true
-		}
-	}
-	return false
+	result := e.Sandbox.Exec(ctx, command, timeout)
+	return result.Output, result.IsError
 }
 
 // ---------------------------------------------------------------------------
@@ -378,33 +358,17 @@ func (e *Executor) execSearchCode(ctx context.Context, input map[string]any) (st
 	}
 	pathFilter, _ := input["path"].(string)
 
-	args := []string{"-rn", "--color=never", "--max-count=50"}
+	// Build grep command and run in sandbox
+	args := "-rn --color=never --max-count=50"
 	if pathFilter != "" {
-		args = append(args, "--include="+pathFilter)
+		args += " --include=" + pathFilter
 	}
-	args = append(args, query, ".")
-
-	execCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(execCtx, "grep", args...)
-	cmd.Dir = e.WorkDir
-
-	out, err := cmd.CombinedOutput()
-	result := string(out)
-
-	if len(result) > 30000 {
-		result = result[:30000] + "\n... (results truncated)"
+	cmd := fmt.Sprintf("grep %s %q .", args, query)
+	result := e.Sandbox.Exec(ctx, cmd, 15*time.Second)
+	if result.ExitCode == 1 && result.Output == "" {
+		return "No matches found.", false
 	}
-
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
-			return "No matches found.", false
-		}
-		return result, false
-	}
-
-	return result, false
+	return result.Output, false
 }
 
 // ---------------------------------------------------------------------------
@@ -416,26 +380,17 @@ func (e *Executor) execReadFile(_ context.Context, input map[string]any) (string
 	if path == "" {
 		return "path is required", true
 	}
-	if strings.Contains(path, "..") {
-		return "path traversal not allowed", true
-	}
 
-	fullPath := path
-	if !strings.HasPrefix(path, "/") {
-		fullPath = e.WorkDir + "/" + path
-	}
-
-	data, err := os.ReadFile(fullPath)
+	data, err := e.Sandbox.ReadFile(path)
 	if err != nil {
 		return "failed to read file: " + err.Error(), true
 	}
 
-	result := string(data)
-	if len(result) > 100000 {
-		result = result[:100000] + "\n... (file truncated at 100KB)"
+	if len(data) > 100000 {
+		data = data[:100000] + "\n... (file truncated at 100KB)"
 	}
 
-	return result, false
+	return data, false
 }
 
 // ---------------------------------------------------------------------------
@@ -448,21 +403,8 @@ func (e *Executor) execWriteFile(_ context.Context, input map[string]any) (strin
 	if path == "" {
 		return "path is required", true
 	}
-	if strings.Contains(path, "..") {
-		return "path traversal not allowed", true
-	}
 
-	fullPath := path
-	if !strings.HasPrefix(path, "/") {
-		fullPath = e.WorkDir + "/" + path
-	}
-
-	// Create parent directories
-	if idx := strings.LastIndex(fullPath, "/"); idx > 0 {
-		os.MkdirAll(fullPath[:idx], 0o755)
-	}
-
-	if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
+	if err := e.Sandbox.WriteFile(path, content); err != nil {
 		return "failed to write file: " + err.Error(), true
 	}
 
@@ -480,30 +422,21 @@ func (e *Executor) execEditFile(_ context.Context, input map[string]any) (string
 	if path == "" {
 		return "path is required", true
 	}
-	if strings.Contains(path, "..") {
-		return "path traversal not allowed", true
-	}
 
-	fullPath := path
-	if !strings.HasPrefix(path, "/") {
-		fullPath = e.WorkDir + "/" + path
-	}
-
-	data, err := os.ReadFile(fullPath)
+	data, err := e.Sandbox.ReadFile(path)
 	if err != nil {
 		return "failed to read file: " + err.Error(), true
 	}
 
-	content := string(data)
 	if oldStr == "" {
 		// Create new file with new_string content
-		if err := os.WriteFile(fullPath, []byte(newStr), 0o644); err != nil {
+		if err := e.Sandbox.WriteFile(path, newStr); err != nil {
 			return "failed to write file: " + err.Error(), true
 		}
 		return fmt.Sprintf("File created: %s (%d bytes)", path, len(newStr)), false
 	}
 
-	count := strings.Count(content, oldStr)
+	count := strings.Count(data, oldStr)
 	if count == 0 {
 		return "old_string not found in file", true
 	}
@@ -511,8 +444,8 @@ func (e *Executor) execEditFile(_ context.Context, input map[string]any) (string
 		return fmt.Sprintf("old_string found %d times, must be unique", count), true
 	}
 
-	content = strings.Replace(content, oldStr, newStr, 1)
-	if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
+	content := strings.Replace(data, oldStr, newStr, 1)
+	if err := e.Sandbox.WriteFile(path, content); err != nil {
 		return "failed to write file: " + err.Error(), true
 	}
 
@@ -561,29 +494,13 @@ func (e *Executor) execListDirectory(_ context.Context, input map[string]any) (s
 	if path == "" {
 		path = "."
 	}
-	if strings.Contains(path, "..") {
-		return "path traversal not allowed", true
-	}
 
-	fullPath := path
-	if !strings.HasPrefix(path, "/") {
-		fullPath = e.WorkDir + "/" + path
-	}
-
-	entries, err := os.ReadDir(fullPath)
+	entries, err := e.Sandbox.ListDir(path)
 	if err != nil {
 		return "failed to list directory: " + err.Error(), true
 	}
 
-	var sb strings.Builder
-	for _, entry := range entries {
-		info, _ := entry.Info()
-		if info != nil {
-			sb.WriteString(fmt.Sprintf("%s %8d %s %s\n",
-				info.Mode(), info.Size(), info.ModTime().Format("Jan 02 15:04"), entry.Name()))
-		}
-	}
-	return sb.String(), false
+	return strings.Join(entries, "\n"), false
 }
 
 // ---------------------------------------------------------------------------

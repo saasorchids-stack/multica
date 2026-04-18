@@ -414,6 +414,16 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 					r.Post("/events", h.SendSessionEvents)
 					r.Post("/resume", h.ResumeSession)
 					r.Get("/stream", h.StreamSessionEvents)
+					// Session resources
+					r.Route("/resources", func(r chi.Router) {
+						r.Get("/", h.ListSessionResources)
+						r.Post("/", h.AddSessionResource)
+						r.Route("/{resourceId}", func(r chi.Router) {
+							r.Get("/", h.GetSessionResource)
+							r.Put("/", h.UpdateSessionResource)
+							r.Delete("/", h.DeleteSessionResource)
+						})
+					})
 					// Session threads
 					r.Get("/threads", h.ListSessionThreads)
 					r.Route("/threads/{threadId}", func(r chi.Router) {

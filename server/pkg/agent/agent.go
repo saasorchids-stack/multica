@@ -28,6 +28,16 @@ type ExecOptions struct {
 	ResumeSessionID string          // if non-empty, resume a previous agent session
 	CustomArgs      []string        // additional CLI arguments appended to the agent command
 	McpServers      []McpServerSpec // MCP servers to attach to this execution
+	// ToolPermissions maps tool names to their permission policy.
+	// "always_allow" (default), "always_ask" (requires confirmation), "always_deny".
+	ToolPermissions map[string]string
+	// CustomTools lists tools that the agent advertises but the server
+	// cannot execute. When called, the loop pauses until the client sends
+	// the result via CustomToolResults.
+	CustomTools []string
+	// McpTools are tools discovered from MCP servers, added to the tool
+	// set dynamically. Execution is handled by the MCP pool outside the loop.
+	McpTools []McpToolDef
 }
 
 // McpServerSpec defines an MCP server to connect during agent execution.
@@ -40,6 +50,15 @@ type McpServerSpec struct {
 	Env       map[string]string `json:"env"`       // environment variables
 }
 
+// McpToolDef describes a tool discovered from an MCP server.
+type McpToolDef struct {
+	Name        string // namespaced: "server.tool"
+	ServerName  string // original server name
+	ToolName    string // original tool name on the server
+	Description string
+	InputSchema any
+}
+
 // Session represents a running agent execution.
 type Session struct {
 	// Messages streams events as the agent works. The channel is closed
@@ -47,19 +66,45 @@ type Session struct {
 	Messages <-chan Message
 	// Result receives exactly one value — the final outcome — then closes.
 	Result <-chan Result
+	// CustomToolResults is used to send custom tool results back to the
+	// agentic loop when it pauses for a tool it can't execute locally.
+	// The handler sends results on this channel; the loop receives them.
+	CustomToolResults chan CustomToolResult
+	// ToolConfirmations is used to send approval/denial for tools that
+	// require permission (permission_policy == "always_ask").
+	ToolConfirmations chan ToolConfirmation
+}
+
+// CustomToolResult is the result of a custom (client-side) tool execution
+// sent back by the client via the user.custom_tool_result event.
+type CustomToolResult struct {
+	CallID  string
+	Output  string
+	IsError bool
+}
+
+// ToolConfirmation is the approval/denial from the client for a tool
+// that has permission_policy == "always_ask".
+type ToolConfirmation struct {
+	CallID   string
+	Approved bool
+	Reason   string // optional denial reason
 }
 
 // MessageType identifies the kind of Message.
 type MessageType string
 
 const (
-	MessageText       MessageType = "text"
-	MessageThinking   MessageType = "thinking"
-	MessageToolUse    MessageType = "tool-use"
-	MessageToolResult MessageType = "tool-result"
-	MessageStatus     MessageType = "status"
-	MessageError      MessageType = "error"
-	MessageLog        MessageType = "log"
+	MessageText            MessageType = "text"
+	MessageThinking        MessageType = "thinking"
+	MessageToolUse         MessageType = "tool-use"
+	MessageToolResult      MessageType = "tool-result"
+	MessageStatus          MessageType = "status"
+	MessageError           MessageType = "error"
+	MessageLog             MessageType = "log"
+	MessageCustomToolUse   MessageType = "custom-tool-use"   // tool requires client execution
+	MessageToolConfirmReq  MessageType = "tool-confirm-req"  // tool needs permission approval
+)
 )
 
 // Message is a unified event emitted by an agent during execution.

@@ -2,11 +2,13 @@ package handler
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/mcp"
+	"github.com/multica-ai/multica/server/internal/mcpclient"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -651,8 +653,7 @@ func (h *Handler) ValidateMcpConnector(w http.ResponseWriter, r *http.Request) {
 }
 
 // DiscoverMcpTools triggers tool discovery on a connector via the MCP protocol.
-// This is a placeholder that caches discovered tools — actual MCP client
-// implementation would establish a connection and call tools/list.
+// Establishes a real MCP connection, calls tools/list, and caches the response.
 func (h *Handler) DiscoverMcpTools(w http.ResponseWriter, r *http.Request) {
 	if _, ok := requireUserID(w, r); !ok {
 		return
@@ -666,20 +667,38 @@ func (h *Handler) DiscoverMcpTools(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Return cached tools if available
-	// In production, this would spawn a stdio/SSE MCP client, send
-	// "tools/list" JSON-RPC, and cache the response.
-	var tools json.RawMessage
-	if connector.DiscoveredTools != nil && len(connector.DiscoveredTools) > 2 {
-		tools = connector.DiscoveredTools
-	} else {
-		tools = []byte("[]")
+	// Build MCP client config from connector row
+	cfg := mcpclient.Config{
+		Name:      connector.Name,
+		Transport: connector.Transport,
+		Command:   connector.Command,
+		URL:       connector.ServerUrl,
 	}
+	if connector.Args != nil {
+		json.Unmarshal(connector.Args, &cfg.Args)
+	}
+	if connector.EnvConfig != nil {
+		json.Unmarshal(connector.EnvConfig, &cfg.Env)
+	}
+
+	// Connect to MCP server and discover tools
+	client, err := mcpclient.New(r.Context(), cfg, slog.Default())
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "failed to connect to MCP server: "+err.Error())
+		return
+	}
+	defer client.Close()
+
+	// Serialize discovered tools
+	discoveredTools, _ := json.Marshal(client.Tools())
+
+	// Cache discovered tools in the database
+	h.Queries.UpdateAgentMcpConnectorTools(r.Context(), connector.ID, discoveredTools)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":    uuidToString(connector.ID),
 		"name":  connector.Name,
-		"tools": tools,
+		"tools": json.RawMessage(discoveredTools),
 	})
 }
 

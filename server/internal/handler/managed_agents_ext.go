@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/crypto"
 	"github.com/multica-ai/multica/server/internal/stream"
+	"github.com/multica-ai/multica/server/pkg/agent"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -248,7 +249,34 @@ func (h *Handler) SendSessionEvents(w http.ResponseWriter, r *http.Request) {
 			})
 			stopReason, _ := json.Marshal(map[string]string{"type": "interrupted"})
 			h.Queries.SetManagedSessionStopReason(r.Context(), session.ID, stopReason)
-		case "user.tool_confirmation", "user.custom_tool_result":
+		case "user.tool_confirmation":
+			var confPayload struct {
+				CallID   string `json:"call_id"`
+				Approved bool   `json:"approved"`
+				Reason   string `json:"reason"`
+			}
+			json.Unmarshal(raw, &confPayload)
+			h.ManagedSessionService.SendToolConfirmation(uuidToString(session.ID), agent.ToolConfirmation{
+				CallID:   confPayload.CallID,
+				Approved: confPayload.Approved,
+				Reason:   confPayload.Reason,
+			})
+			h.Queries.UpdateManagedSessionStatus(r.Context(), db.UpdateManagedSessionStatusParams{
+				ID:     session.ID,
+				Status: "running",
+			})
+		case "user.custom_tool_result":
+			var resultPayload struct {
+				CallID  string `json:"call_id"`
+				Output  string `json:"output"`
+				IsError bool   `json:"is_error"`
+			}
+			json.Unmarshal(raw, &resultPayload)
+			h.ManagedSessionService.SendCustomToolResult(uuidToString(session.ID), agent.CustomToolResult{
+				CallID:  resultPayload.CallID,
+				Output:  resultPayload.Output,
+				IsError: resultPayload.IsError,
+			})
 			h.Queries.UpdateManagedSessionStatus(r.Context(), db.UpdateManagedSessionStatusParams{
 				ID:     session.ID,
 				Status: "running",
