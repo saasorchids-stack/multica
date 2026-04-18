@@ -26,10 +26,11 @@ CREATE TABLE managed_agent (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     archived_at TIMESTAMPTZ,
-    UNIQUE(workspace_id, name) WHERE archived_at IS NULL
 );
 
 CREATE INDEX idx_managed_agent_workspace ON managed_agent(workspace_id);
+CREATE UNIQUE INDEX idx_managed_agent_unique_name
+    ON managed_agent(workspace_id, name) WHERE archived_at IS NULL;
 
 CREATE TABLE managed_agent_version (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -51,10 +52,11 @@ CREATE TABLE environment (
     config JSONB NOT NULL DEFAULT '{"type":"cloud","packages":{},"networking":{"type":"unrestricted"}}',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     archived_at TIMESTAMPTZ,
-    UNIQUE(name, workspace_id) WHERE archived_at IS NULL
 );
 
 CREATE INDEX idx_environment_workspace ON environment(workspace_id);
+CREATE UNIQUE INDEX idx_environment_unique_name
+    ON environment(name, workspace_id) WHERE archived_at IS NULL;
 
 -- ===========================================================================
 -- 3. MANAGED SESSIONS (full state machine, usage tracking)
