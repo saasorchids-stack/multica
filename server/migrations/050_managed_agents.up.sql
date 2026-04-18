@@ -25,7 +25,7 @@ CREATE TABLE managed_agent (
     version INT NOT NULL DEFAULT 1,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    archived_at TIMESTAMPTZ,
+    archived_at TIMESTAMPTZ
 );
 
 CREATE INDEX idx_managed_agent_workspace ON managed_agent(workspace_id);
@@ -51,7 +51,7 @@ CREATE TABLE environment (
     name TEXT NOT NULL,
     config JSONB NOT NULL DEFAULT '{"type":"cloud","packages":{},"networking":{"type":"unrestricted"}}',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    archived_at TIMESTAMPTZ,
+    archived_at TIMESTAMPTZ
 );
 
 CREATE INDEX idx_environment_workspace ON environment(workspace_id);
