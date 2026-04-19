@@ -96,7 +96,7 @@ func (b *agenticCloudBackend) Execute(ctx context.Context, prompt string, opts E
 		model = os.Getenv("CLOUD_DEFAULT_MODEL")
 	}
 	if model == "" {
-		model = "claude-sonnet-4-20250514"
+		model = "anthropic/claude-opus-4.6"
 	}
 
 	maxTurns := b.maxTurns

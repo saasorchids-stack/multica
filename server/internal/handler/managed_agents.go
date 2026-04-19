@@ -101,7 +101,7 @@ func (h *Handler) CreateManagedAgent(w http.ResponseWriter, r *http.Request) {
 	if req.Model != nil {
 		params.Model = req.Model
 	} else {
-		params.Model = []byte(`{"id":"claude-sonnet-4-20250514","speed":"standard"}`)
+		params.Model = []byte(`{"id":"anthropic/claude-opus-4.6","speed":"standard"}`)
 	}
 	if req.SystemPrompt != nil {
 		params.SystemPrompt.String = *req.SystemPrompt
