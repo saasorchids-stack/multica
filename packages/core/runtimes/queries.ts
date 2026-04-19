@@ -16,7 +16,7 @@ export function runtimeListOptions(wsId: string, owner?: "me") {
 }
 
 const GITHUB_RELEASES_URL =
-  "https://api.github.com/repos/aurion-ai/aurion/releases/latest";
+  "https://api.github.com/repos/saasorchids-stack/multica/releases/latest";
 
 export function latestCliVersionOptions() {
   return queryOptions({
