@@ -21,8 +21,8 @@ export function UsageTab() {
       .getWorkspaceBudget()
       .then((b) => {
         setBudget(b);
-        setDailyLimit(b.daily_limit > 0 ? String(b.daily_limit) : "");
-        setMonthlyLimit(b.monthly_limit > 0 ? String(b.monthly_limit) : "");
+        setDailyLimit(b.daily_limit_usd && b.daily_limit_usd > 0 ? String(b.daily_limit_usd) : "");
+        setMonthlyLimit(b.monthly_limit_usd && b.monthly_limit_usd > 0 ? String(b.monthly_limit_usd) : "");
       })
       .catch(() => setBudget(null))
       .finally(() => setLoading(false));
@@ -67,13 +67,13 @@ export function UsageTab() {
         <div className="grid gap-4 sm:grid-cols-2">
           <SpendingCard
             label="Today"
-            spent={budget.daily_spent}
-            limit={budget.daily_limit}
+            spent={budget.daily_spent_usd}
+            limit={budget.daily_limit_usd}
           />
           <SpendingCard
             label="This Month"
-            spent={budget.monthly_spent}
-            limit={budget.monthly_limit}
+            spent={budget.monthly_spent_usd}
+            limit={budget.monthly_limit_usd}
           />
         </div>
       )}
@@ -136,9 +136,9 @@ function SpendingCard({
 }: {
   label: string;
   spent: number;
-  limit: number;
+  limit?: number;
 }) {
-  const hasLimit = limit > 0;
+  const hasLimit = limit != null && limit > 0;
   const pct = hasLimit ? Math.min((spent / limit) * 100, 100) : 0;
   const isOver = hasLimit && spent >= limit;
   const isWarning = hasLimit && pct >= 80 && !isOver;
