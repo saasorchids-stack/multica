@@ -135,7 +135,7 @@ export function SessionsTab({ agent }: { agent: Agent }) {
       />
       <div className="space-y-1.5">
       {sorted.map((s) => {
-        const st = statusStyles[s.status] ?? statusStyles.idle;
+        const st = statusStyles[s.status] ?? statusStyles.idle ?? { dot: "bg-gray-400", color: "text-muted-foreground", label: s.status };
         return (
           <button
             key={s.id}
