@@ -71,12 +71,29 @@ Implementation of the 3-component Managed Agents architecture (Session Store + C
 | `packages/views/agents/index.ts` | Export SessionView |
 | `CLAUDE.md` | Added Managed Agents Architecture section |
 
-## Phase 2 — TODO
+## Phase 2 — Crash Recovery + Sessions Tab + Budget ✅
+
+### Module 8: Crash Recovery ✅
+- **main.go**: `recoverRunningSessions()` marks stale running sessions as interrupted on startup
+- **NewRouter** returns `(chi.Router, *handler.Handler)` for service access
+- **Store.Queries()** exposed for direct DB access
+
+### Module 9: Sessions Tab ✅
+- **SessionsTab**: `packages/views/agents/components/tabs/sessions-tab.tsx` — lists agent sessions, drills into SessionView
+- **agent-detail.tsx**: Sessions tab added between Tasks and MCP Servers
+- **ListManagedSessions handler**: supports `?agent_id=` query param filter
+- **Client**: `listManagedSessions({ agentId })` method updated
+
+### Module 10: Budget Enforcement ✅
+- **CostTracker.CheckBudget()**: reads daily/monthly budget, checks current spending vs limit
+- **GetWorkspaceBudget query**: dedicated SQL for budget columns
+- **CreateManagedSession**: rejects with HTTP 402 when budget exceeded
+- **GET /api/v1/sessions/budget**: API endpoint for frontend budget display
+- **BudgetStatus type**: `packages/core/types/managed-agents.ts`
+
+## Phase 3 — TODO
 - [ ] Docker-based sandbox (container-per-session, cattle pattern)
 - [ ] Credential isolation via MCP proxy (vault tokens never in sandbox)
-- [ ] Workspace budget enforcement (daily_budget_usd, monthly_budget_usd)
 - [ ] Scheduler (cron + webhook triggers for managed sessions)
-- [ ] Session View integration into agent detail page (tab)
 - [ ] Context compaction via cheaper model (Haiku) — currently heuristic-based
-- [ ] Recovery on server startup (GetRunningSessions → Wake each)
 - [ ] E2E tests for Session Store API
