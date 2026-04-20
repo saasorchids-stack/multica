@@ -64,6 +64,7 @@ test.describe("Navigation & Layout", () => {
     await expect(sb.getByRole("link", { name: "Projects" })).toBeVisible();
     await expect(sb.getByRole("link", { name: "Autopilot" })).toBeVisible();
     await expect(sb.getByRole("link", { name: "Agents" })).toBeVisible();
+    await expect(sb.getByRole("link", { name: "Executions" })).toBeVisible();
 
     // Configure
     await expect(sb.getByRole("link", { name: "Runtimes" })).toBeVisible();
@@ -300,6 +301,59 @@ test.describe("Other Pages", () => {
       timeout: 10000,
     });
   });
+
+  test("executions page loads", async ({ page }) => {
+    await goto(page, "/main/executions");
+    await expect(page.getByText(/Execution Agents/i).first()).toBeVisible({
+      timeout: 10000,
+    });
+  });
+
+  test("executions page shows templates", async ({ page }) => {
+    await goto(page, "/main/executions");
+    await expect(page.getByText("Web Scraper")).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText("LinkedIn Prospector")).toBeVisible();
+    await expect(page.getByText("Code Generator")).toBeVisible();
+    await expect(page.getByText("Deep Research")).toBeVisible();
+    await expect(page.getByText("Form Automator")).toBeVisible();
+    await expect(page.getByText("Custom Agent")).toBeVisible();
+  });
+
+  test("executions page template selection shows prompt builder", async ({ page }) => {
+    await goto(page, "/main/executions");
+    // Click on Web Scraper template
+    await page.getByText("Web Scraper").click();
+    // Prompt builder should appear with configure section
+    await expect(page.getByText("Configure Execution")).toBeVisible({ timeout: 5000 });
+    // Stealth mode toggle should be visible (Web Scraper has stealth on by default)
+    await expect(page.getByText("Stealth Mode")).toBeVisible();
+    // Launch button
+    await expect(page.getByRole("button", { name: /Launch Execution/i })).toBeVisible();
+  });
+
+  test("executions page shows anti-detection tools panel", async ({ page }) => {
+    await goto(page, "/main/executions");
+    // Click Anti-Detection Tools button
+    await page.getByRole("button", { name: /Anti-Detection Tools/i }).click();
+    await expect(page.getByText("puppeteer-extra-stealth")).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText("FlareSolverr")).toBeVisible();
+    await expect(page.getByText("curl-impersonate")).toBeVisible();
+  });
+
+  test("executions page shows recent executions section", async ({ page }) => {
+    await goto(page, "/main/executions");
+    await expect(page.getByText("Recent Executions")).toBeVisible({ timeout: 10000 });
+    // Empty state should show "No executions yet"
+    await expect(page.getByText(/No executions yet/i)).toBeVisible();
+  });
+
+  test("executions page can navigate from sidebar", async ({ page }) => {
+    await goto(page, "/main/agents");
+    const sb = await ensureSidebarOpen(page);
+    await sb.getByRole("link", { name: "Executions" }).dispatchEvent("click");
+    await page.waitForURL(/\/main\/executions/, { timeout: 10000 });
+    await expect(page.getByText(/Execution Agents/i).first()).toBeVisible({ timeout: 10000 });
+  });
 });
 
 // ─── Cross-Page Smoke ────────────────────────────────────────────────
@@ -314,6 +368,7 @@ test.describe("Cross-Page Smoke", () => {
       "/main/runtimes",
       "/main/skills",
       "/main/settings",
+      "/main/executions",
       "/main/inbox",
       "/main/my-issues",
     ];
