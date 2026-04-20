@@ -66,7 +66,8 @@ export interface CreateAgentRequest {
   description?: string;
   instructions?: string;
   avatar_url?: string;
-  runtime_id: string;
+  runtime_id?: string;
+  runtime_mode?: string;
   runtime_config?: Record<string, unknown>;
   custom_env?: Record<string, string>;
   custom_args?: string[];

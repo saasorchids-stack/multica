@@ -51,6 +51,7 @@ export function CreateAgentDialog({
   const [creating, setCreating] = useState(false);
   const [runtimeOpen, setRuntimeOpen] = useState(false);
   const [runtimeFilter, setRuntimeFilter] = useState<RuntimeFilter>("mine");
+  const [useCloudMode, setUseCloudMode] = useState(runtimes.length === 0);
 
   const getOwnerMember = (ownerId: string | null) => {
     if (!ownerId) return null;
@@ -81,13 +82,16 @@ export function CreateAgentDialog({
   const selectedRuntime = runtimes.find((d) => d.id === selectedRuntimeId) ?? null;
 
   const handleSubmit = async () => {
-    if (!name.trim() || !selectedRuntime) return;
+    if (!name.trim()) return;
+    if (!useCloudMode && !selectedRuntime) return;
     setCreating(true);
     try {
       await onCreate({
         name: name.trim(),
         description: description.trim(),
-        runtime_id: selectedRuntime.id,
+        ...(useCloudMode
+          ? { runtime_mode: "cloud" }
+          : { runtime_id: selectedRuntime!.id }),
         visibility,
       });
       onClose();
@@ -171,33 +175,48 @@ export function CreateAgentDialog({
           <div className="min-w-0">
             <div className="flex items-center justify-between">
               <Label className="text-xs text-muted-foreground">Runtime</Label>
-              {hasOtherRuntimes && (
-                <div className="flex items-center gap-0.5 rounded-md bg-muted p-0.5">
-                  <button
-                    type="button"
-                    onClick={() => { setRuntimeFilter("mine"); setSelectedRuntimeId(""); }}
-                    className={`rounded px-2 py-0.5 text-xs font-medium transition-colors ${
-                      runtimeFilter === "mine"
-                        ? "bg-background text-foreground shadow-sm"
-                        : "text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    Mine
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { setRuntimeFilter("all"); setSelectedRuntimeId(""); }}
-                    className={`rounded px-2 py-0.5 text-xs font-medium transition-colors ${
-                      runtimeFilter === "all"
-                        ? "bg-background text-foreground shadow-sm"
-                        : "text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    All
-                  </button>
-                </div>
-              )}
+              <div className="flex items-center gap-0.5 rounded-md bg-muted p-0.5">
+                <button
+                  type="button"
+                  onClick={() => setUseCloudMode(true)}
+                  className={`rounded px-2 py-0.5 text-xs font-medium transition-colors ${
+                    useCloudMode
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  Cloud
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setUseCloudMode(false)}
+                  disabled={runtimes.length === 0}
+                  className={`rounded px-2 py-0.5 text-xs font-medium transition-colors ${
+                    !useCloudMode
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  } disabled:opacity-40 disabled:cursor-not-allowed`}
+                >
+                  Self-hosted
+                </button>
+              </div>
             </div>
+            {useCloudMode ? (
+              <div className="flex items-center gap-3 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2.5 mt-1.5 text-sm">
+                <Cloud className="h-4 w-4 shrink-0 text-primary" />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium">Cloud (Claude Opus 4.6)</span>
+                    <span className="shrink-0 rounded bg-info/10 px-1.5 py-0.5 text-xs font-medium text-info">
+                      Cloud
+                    </span>
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    Runs via OpenRouter — no runtime needed
+                  </div>
+                </div>
+              </div>
+            ) : (
             <Popover open={runtimeOpen} onOpenChange={setRuntimeOpen}>
               <PopoverTrigger
                 disabled={runtimes.length === 0 && !runtimesLoading}
@@ -274,6 +293,7 @@ export function CreateAgentDialog({
                 })}
               </PopoverContent>
             </Popover>
+            )}
           </div>
         </div>
 
@@ -283,7 +303,7 @@ export function CreateAgentDialog({
           </Button>
           <Button
             onClick={handleSubmit}
-            disabled={creating || !name.trim() || !selectedRuntime}
+            disabled={creating || !name.trim() || (!useCloudMode && !selectedRuntime)}
           >
             {creating ? "Creating..." : "Create"}
           </Button>
