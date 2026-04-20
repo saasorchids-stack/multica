@@ -629,9 +629,12 @@ func (e *Executor) execSendEmail(ctx context.Context, input map[string]any) (str
 
 // sendViaResend sends email using the Resend API (https://resend.com).
 func (e *Executor) sendViaResend(ctx context.Context, apiKey, to, subject, body string) (string, bool) {
-	fromAddr := os.Getenv("RESEND_FROM")
+	fromAddr := os.Getenv("RESEND_FROM_EMAIL")
 	if fromAddr == "" {
-		fromAddr = "agent@aurion.studio"
+		fromAddr = os.Getenv("RESEND_FROM")
+	}
+	if fromAddr == "" {
+		fromAddr = "Aurion Agent <agent@aurion.studio>"
 	}
 
 	payload, _ := json.Marshal(map[string]any{

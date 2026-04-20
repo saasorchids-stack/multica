@@ -190,6 +190,15 @@ func (b *cloudClaudeBackend) Execute(ctx context.Context, prompt string, opts Ex
 		defer resp.Body.Close()
 		errBody, _ := io.ReadAll(resp.Body)
 		cancel()
+		if resp.StatusCode == 402 {
+			return nil, fmt.Errorf("AI provider requires payment: insufficient credits. Please add credits at your provider's dashboard. Details: %s", string(errBody))
+		}
+		if resp.StatusCode == 401 {
+			return nil, fmt.Errorf("AI provider authentication failed: check your ANTHROPIC_API_KEY. Details: %s", string(errBody))
+		}
+		if resp.StatusCode == 429 {
+			return nil, fmt.Errorf("AI provider rate limit exceeded. Please wait and retry. Details: %s", string(errBody))
+		}
 		return nil, fmt.Errorf("anthropic API error (status %d): %s", resp.StatusCode, string(errBody))
 	}
 
