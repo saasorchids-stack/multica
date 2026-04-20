@@ -417,6 +417,12 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 					r.Post("/events", h.SendSessionEvents)
 					r.Post("/resume", h.ResumeSession)
 					r.Get("/stream", h.StreamSessionEvents)
+
+					// Session Store API — Managed Agents architecture
+					r.Get("/store/events", h.GetSessionStoreEvents)
+					r.Get("/store/cost", h.GetSessionCost)
+					r.Post("/store/wake", h.WakeSession)
+
 					// Session resources
 					r.Route("/resources", func(r chi.Router) {
 						r.Get("/", h.ListSessionResources)

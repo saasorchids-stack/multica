@@ -112,6 +112,41 @@ make db-down          # Stop shared PostgreSQL
 
 CI runs on Node 22 and Go 1.26.1 with a `pgvector/pgvector:pg17` PostgreSQL service. See `.github/workflows/ci.yml`.
 
+## Managed Agents Architecture
+
+Aurion implements the **3-component Managed Agents** pattern (inspired by Anthropic's architecture):
+
+### Components
+
+1. **Session Store** (`server/internal/session/store.go`) — Append-only event log outside Claude's context window. Every event gets a monotonic `event_index`. Supports positional slicing: `getEvents(from, to)` and type filtering.
+
+2. **Context Engineering** (`server/internal/session/context.go`) — Builds Claude's context window from the session log. Three strategies: `sliding_window`, `smart_summary`, `full_replay`. Context resets compact old events into summaries at 80% of token budget.
+
+3. **Cost Tracker** (`server/internal/session/cost.go`) — Granular per-event cost tracking with provider pricing tables. Breaks down by operation, tool, and provider. Supports workspace-level budget monitoring.
+
+### Key Design Decisions
+
+- **Session ≠ Context Window** — The session log stores ALL events (append-only, immutable). The harness reads events and TRANSFORMS them into the context window via context strategies.
+- **Wake Recovery** — If the harness crashes, any instance calls `store.Wake(sessionID)` to resume from the last event index. The event log is the source of truth.
+- **Event Indexing** — Every event has a unique `(session_id, event_index)` pair. This enables positional slicing, which is how context engineering works.
+- **Cost per Event** — Each event optionally carries metadata with token counts and cost_usd. The cost_event table aggregates by session/operation/tool/workspace.
+
+### API Routes (Session Store)
+
+```
+GET  /api/v1/sessions/{id}/store/events?from=0&to=100&types=tool_call,tool_result
+GET  /api/v1/sessions/{id}/store/cost
+POST /api/v1/sessions/{id}/store/wake
+```
+
+### Migration
+
+Migration `052_session_store_harness` adds:
+- `event_index INT NOT NULL` + metadata JSONB to `session_event`
+- `cost_event` table for granular cost tracking
+- `last_event_index`, `context_strategy`, `total_cost_usd`, `wake_count`, `last_wake_at` to `managed_session`
+- `daily_budget_usd`, `monthly_budget_usd` to `workspace`
+
 ### Worktree Support
 
 All checkouts share one PostgreSQL container. Isolation is at the database level — each worktree gets its own DB name and unique ports via `.env.worktree`. Main checkouts use `.env`.

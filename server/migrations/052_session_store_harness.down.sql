@@ -1,0 +1,12 @@
+BEGIN;
+ALTER TABLE session_event DROP COLUMN IF EXISTS event_index;
+ALTER TABLE session_event DROP COLUMN IF EXISTS metadata;
+DROP TABLE IF EXISTS cost_event;
+ALTER TABLE managed_session DROP COLUMN IF EXISTS last_event_index;
+ALTER TABLE managed_session DROP COLUMN IF EXISTS context_strategy;
+ALTER TABLE managed_session DROP COLUMN IF EXISTS total_cost_usd;
+ALTER TABLE managed_session DROP COLUMN IF EXISTS wake_count;
+ALTER TABLE managed_session DROP COLUMN IF EXISTS last_wake_at;
+ALTER TABLE workspace DROP COLUMN IF EXISTS daily_budget_usd;
+ALTER TABLE workspace DROP COLUMN IF EXISTS monthly_budget_usd;
+COMMIT;

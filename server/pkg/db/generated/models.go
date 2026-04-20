@@ -499,6 +499,11 @@ type ManagedSession struct {
 	CreatedAt                pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt                pgtype.Timestamptz `json:"updated_at"`
 	ArchivedAt               pgtype.Timestamptz `json:"archived_at"`
+	LastEventIndex           int32              `json:"last_event_index"`
+	ContextStrategy          []byte             `json:"context_strategy"`
+	TotalCostUsd             string             `json:"total_cost_usd"`
+	WakeCount                int32              `json:"wake_count"`
+	LastWakeAt               pgtype.Timestamptz `json:"last_wake_at"`
 }
 
 type SessionEvent struct {
@@ -509,6 +514,8 @@ type SessionEvent struct {
 	Payload     []byte             `json:"payload"`
 	ProcessedAt pgtype.Timestamptz `json:"processed_at"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	EventIndex  pgtype.Int4        `json:"event_index"`
+	Metadata    []byte             `json:"metadata"`
 }
 
 type MemoryStore struct {

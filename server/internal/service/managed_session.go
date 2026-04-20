@@ -16,6 +16,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/mcpclient"
 	"github.com/multica-ai/multica/server/internal/oauth"
 	"github.com/multica-ai/multica/server/internal/realtime"
+	"github.com/multica-ai/multica/server/internal/session"
 	"github.com/multica-ai/multica/server/internal/stream"
 	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/pkg/agent"
@@ -31,6 +32,10 @@ type ManagedSessionService struct {
 	Bus     *events.Bus
 	Logger  *slog.Logger
 
+	// Session Store — Anthropic Managed Agents architecture
+	Store       *session.Store
+	CostTracker *session.CostTracker
+
 	// activeSessions tracks running sessions so we can send them custom tool
 	// results and tool confirmations from event handlers.
 	mu             sync.Mutex
@@ -44,6 +49,8 @@ func NewManagedSessionService(q *db.Queries, hub *realtime.Hub, bus *events.Bus)
 		Hub:            hub,
 		Bus:            bus,
 		Logger:         slog.Default(),
+		Store:          session.NewStore(q, hub, slog.Default()),
+		CostTracker:    session.NewCostTracker(q),
 		activeSessions: make(map[string]*agent.Session),
 	}
 }
@@ -183,79 +190,89 @@ func (s *ManagedSessionService) ExecuteSession(
 	return nil
 }
 
-// drainAndStream reads all messages from the agent session, broadcasts them
-// via SSE + WebSocket, saves them as session events, and handles the final result.
+// drainAndStream reads all messages from the agent session, persists them
+// through the Session Store (append-only log with event indices), broadcasts
+// them via SSE + WebSocket, tracks costs, and handles the final result.
 func (s *ManagedSessionService) drainAndStream(
 	ctx context.Context,
 	agentSession *agent.Session,
-	session db.ManagedSession,
+	dbSession db.ManagedSession,
 	workspaceIDStr, sessionIDStr string,
 ) {
+	// Initialize the Session Store counter for this session
+	s.Store.InitCounter(ctx, sessionIDStr)
+
 	for msg := range agentSession.Messages {
-		// Stream via SSE
+		// Map agent message type to session event type
+		evt := session.Event{
+			SessionID: sessionIDStr,
+			Type:      mapMessageType(msg.Type),
+			Data:      mapMessageData(msg),
+		}
+
+		// Append to Session Store (durable, indexed, broadcast)
+		idx, err := s.Store.AppendEvent(ctx, sessionIDStr, evt)
+		if err != nil {
+			s.Logger.Error("failed to append session event",
+				"session_id", sessionIDStr, "error", err)
+		}
+
+		// Also stream via SSE (legacy path for backward compat)
 		stream.Global.Broadcast(sessionIDStr, stream.Event{
 			Type:    string(msg.Type),
 			Content: formatMessageContent(msg),
 		})
 
-		// Broadcast via WebSocket
+		// Broadcast via WebSocket with event index
 		s.broadcastEvent(workspaceIDStr, sessionIDStr, "session.message", map[string]any{
-			"type":    string(msg.Type),
-			"content": msg.Content,
-			"tool":    msg.Tool,
-			"call_id": msg.CallID,
-			"status":  msg.Status,
-		})
-
-		// Save as session event
-		payload, _ := json.Marshal(map[string]any{
-			"type":    string(msg.Type),
-			"content": msg.Content,
-			"tool":    msg.Tool,
-			"call_id": msg.CallID,
-			"input":   msg.Input,
-			"output":  msg.Output,
-			"status":  msg.Status,
-		})
-		s.Queries.CreateSessionEvent(ctx, db.CreateSessionEventParams{
-			SessionID: session.ID,
-			Type:      "agent." + string(msg.Type),
-			Payload:   payload,
+			"type":        string(msg.Type),
+			"event_index": idx,
+			"content":     msg.Content,
+			"tool":        msg.Tool,
+			"call_id":     msg.CallID,
+			"status":      msg.Status,
 		})
 	}
 
 	// Wait for final result
 	result := <-agentSession.Result
 
-	// Update session status — Anthropic uses idle (success) or terminated (error)
+	// Record cost via CostTracker
+	for model, usage := range result.Usage {
+		s.CostTracker.Record(ctx, session.CostRecord{
+			SessionID:    sessionIDStr,
+			WorkspaceID:  workspaceIDStr,
+			Provider:     "anthropic",
+			Model:        model,
+			Operation:    "inference",
+			TokensInput:  usage.InputTokens,
+			TokensOutput: usage.OutputTokens,
+			TokensCached: usage.CacheReadTokens,
+		})
+	}
+
+	// Close session via Session Store
 	finalStatus := "idle"
 	if result.Status == "failed" || result.Status == "aborted" {
 		finalStatus = "terminated"
 	}
 
-	s.Queries.UpdateManagedSessionStatus(ctx, db.UpdateManagedSessionStatusParams{
-		ID:     session.ID,
-		Status: finalStatus,
+	s.Store.Close(ctx, sessionIDStr, finalStatus, map[string]any{
+		"status":      result.Status,
+		"error":       result.Error,
+		"duration_ms": result.DurationMs,
 	})
 
-	// Update usage tokens
+	// Update usage tokens (legacy path)
 	for _, usage := range result.Usage {
 		s.Queries.UpdateManagedSessionUsage(ctx, db.UpdateManagedSessionUsageParams{
-			ID:                       session.ID,
+			ID:                       dbSession.ID,
 			UsageInputTokens:         usage.InputTokens,
 			UsageOutputTokens:        usage.OutputTokens,
 			UsageCacheCreationTokens: usage.CacheWriteTokens,
 			UsageCacheReadTokens:     usage.CacheReadTokens,
 		})
 	}
-
-	// Set stop reason
-	stopReason, _ := json.Marshal(map[string]any{
-		"status":      result.Status,
-		"error":       result.Error,
-		"duration_ms": result.DurationMs,
-	})
-	s.Queries.SetManagedSessionStopReason(ctx, session.ID, stopReason)
 
 	// Stream done event
 	stream.Global.Broadcast(sessionIDStr, stream.Event{
@@ -286,6 +303,55 @@ func (s *ManagedSessionService) drainAndStream(
 		"status", finalStatus,
 		"duration_ms", result.DurationMs,
 	)
+}
+
+// mapMessageType converts agent.MessageType to session.EventType.
+func mapMessageType(mt agent.MessageType) session.EventType {
+	switch mt {
+	case agent.MessageText:
+		return session.EventAssistantMessage
+	case agent.MessageToolUse:
+		return session.EventToolCall
+	case agent.MessageToolResult:
+		return session.EventToolResult
+	case agent.MessageThinking:
+		return session.EventThinking
+	default:
+		return session.EventSystemEvent
+	}
+}
+
+// mapMessageData converts agent.Message data to session.EventData.
+func mapMessageData(msg agent.Message) session.EventData {
+	switch msg.Type {
+	case agent.MessageText:
+		return session.EventData{
+			Role:    "assistant",
+			Content: msg.Content,
+		}
+	case agent.MessageToolUse:
+		return session.EventData{
+			ToolName: msg.Tool,
+			CallID:   msg.CallID,
+			Input:    msg.Input,
+		}
+	case agent.MessageToolResult:
+		return session.EventData{
+			ToolName: msg.Tool,
+			CallID:   msg.CallID,
+			Output:   msg.Output,
+			IsError:  msg.Status == "error",
+		}
+	case agent.MessageThinking:
+		return session.EventData{
+			Thinking: msg.Content,
+		}
+	default:
+		return session.EventData{
+			EventName: string(msg.Type),
+			Details:   msg.Content,
+		}
+	}
 }
 
 // failSession marks a session as failed and broadcasts the error.

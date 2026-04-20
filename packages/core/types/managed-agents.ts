@@ -105,6 +105,18 @@ export interface ManagedSession {
   stop_reason: SessionStopReason | null;
   created_at: string;
   updated_at: string;
+  // Session Store fields (Managed Agents architecture)
+  last_event_index?: number;
+  context_strategy?: ContextStrategy | null;
+  total_cost_usd?: number;
+  wake_count?: number;
+  last_wake_at?: string | null;
+}
+
+export interface ContextStrategy {
+  type: "sliding_window" | "smart_summary" | "full_replay";
+  max_tokens: number;
+  summary_model?: string;
 }
 
 export interface SessionResource {
@@ -149,6 +161,90 @@ export interface SessionEvent {
   type: SessionEventType;
   payload: Record<string, unknown>;
   created_at: string;
+}
+
+// Session Store Events (Managed Agents architecture)
+export type StoreEventType =
+  | "user_message"
+  | "assistant_message"
+  | "tool_call"
+  | "tool_result"
+  | "context_reset"
+  | "system_event"
+  | "cost_event"
+  | "thinking";
+
+export interface StoreEvent {
+  id: string;
+  session_id: string;
+  type: StoreEventType;
+  index: number;
+  timestamp: string;
+  data: StoreEventData;
+  metadata?: StoreEventMeta;
+}
+
+export interface StoreEventData {
+  role?: string;
+  content?: string;
+  tool_name?: string;
+  call_id?: string;
+  input?: Record<string, unknown>;
+  output?: string;
+  is_error?: boolean;
+  summary?: string;
+  compacted_range?: [number, number];
+  event_name?: string;
+  details?: string;
+  thinking?: string;
+}
+
+export interface StoreEventMeta {
+  tokens_input?: number;
+  tokens_output?: number;
+  tokens_cached?: number;
+  cost_usd?: number;
+  provider?: string;
+  model?: string;
+  duration_ms?: number;
+}
+
+export interface SessionCostReport {
+  total_cost_usd: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_cached_tokens: number;
+  event_count: number;
+  by_operation: OperationCost[];
+  by_tool: ToolCost[];
+}
+
+export interface OperationCost {
+  operation: string;
+  total_cost_usd: number;
+  call_count: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+}
+
+export interface ToolCost {
+  tool_name: string;
+  total_cost_usd: number;
+  call_count: number;
+  total_duration_ms: number;
+}
+
+export interface SessionInfo {
+  id: string;
+  workspace_id: string;
+  agent_id: string;
+  status: string;
+  last_event_index: number;
+  wake_count: number;
+  total_cost_usd: number;
+  context_strategy: ContextStrategy | null;
+  created_at: string;
+  updated_at: string;
 }
 
 // Memory Stores

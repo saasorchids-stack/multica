@@ -78,3 +78,33 @@ UPDATE managed_session SET
     stop_reason = $2,
     updated_at = now()
 WHERE id = $1;
+
+-- name: WakeManagedSession :one
+-- Wake a session for crash recovery. Increments wake_count, updates status.
+UPDATE managed_session SET
+    status = 'running',
+    wake_count = wake_count + 1,
+    last_wake_at = now(),
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: UpdateManagedSessionEventIndex :exec
+-- Called by the harness after each event to enable fast resume.
+UPDATE managed_session SET
+    last_event_index = $2,
+    updated_at = now()
+WHERE id = $1;
+
+-- name: UpdateManagedSessionCost :exec
+-- Increment the aggregated cost for a session.
+UPDATE managed_session SET
+    total_cost_usd = total_cost_usd + $2,
+    updated_at = now()
+WHERE id = $1;
+
+-- name: GetRunningSessions :many
+-- Find sessions that were running when the server crashed (for wake recovery).
+SELECT * FROM managed_session
+WHERE status = 'running'
+ORDER BY updated_at DESC;

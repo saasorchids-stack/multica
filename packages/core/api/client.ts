@@ -72,6 +72,9 @@ import type {
   ManagedSession,
   CreateManagedSessionRequest,
   SessionEvent,
+  StoreEvent,
+  SessionCostReport,
+  SessionInfo,
   MemoryStore,
   CreateMemoryStoreRequest,
   MemoryDocument,
@@ -1003,6 +1006,27 @@ export class ApiClient {
 
   streamSessionEvents(sessionId: string): EventSource {
     return new EventSource(`${this.baseUrl}/api/v1/sessions/${sessionId}/stream`);
+  }
+
+  // Session Store API (Managed Agents architecture)
+  async getSessionStoreEvents(
+    sessionId: string,
+    opts?: { from?: number; to?: number; types?: string[] },
+  ): Promise<{ events: StoreEvent[]; count: number }> {
+    const params = new URLSearchParams();
+    if (opts?.from !== undefined) params.set("from", String(opts.from));
+    if (opts?.to !== undefined) params.set("to", String(opts.to));
+    if (opts?.types?.length) params.set("types", opts.types.join(","));
+    const qs = params.toString();
+    return this.fetch(`/api/v1/sessions/${sessionId}/store/events${qs ? `?${qs}` : ""}`);
+  }
+
+  async getSessionCost(sessionId: string): Promise<SessionCostReport> {
+    return this.fetch(`/api/v1/sessions/${sessionId}/store/cost`);
+  }
+
+  async wakeSession(sessionId: string): Promise<SessionInfo> {
+    return this.fetch(`/api/v1/sessions/${sessionId}/store/wake`, { method: "POST" });
   }
 
   // Session Threads
