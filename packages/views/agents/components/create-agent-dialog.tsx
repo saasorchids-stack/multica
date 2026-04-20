@@ -51,7 +51,14 @@ export function CreateAgentDialog({
   const [creating, setCreating] = useState(false);
   const [runtimeOpen, setRuntimeOpen] = useState(false);
   const [runtimeFilter, setRuntimeFilter] = useState<RuntimeFilter>("mine");
-  const [useCloudMode, setUseCloudMode] = useState(runtimes.length === 0);
+  const [useCloudMode, setUseCloudMode] = useState(true);
+
+  // Auto-switch to cloud mode when runtimes finish loading and none are available
+  useEffect(() => {
+    if (!runtimesLoading && runtimes.length === 0) {
+      setUseCloudMode(true);
+    }
+  }, [runtimes.length, runtimesLoading]);
 
   const getOwnerMember = (ownerId: string | null) => {
     if (!ownerId) return null;
