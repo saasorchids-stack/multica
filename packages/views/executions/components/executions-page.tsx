@@ -639,7 +639,7 @@ export function ExecutionsPage() {
               {/* Model Selection */}
               <div>
                 <Label className="text-xs">Model</Label>
-                <Select value={model} onValueChange={setModel}>
+                <Select value={model} onValueChange={(v) => { if (v) setModel(v); }}>
                   <SelectTrigger className="h-8 text-xs">
                     <SelectValue />
                   </SelectTrigger>
